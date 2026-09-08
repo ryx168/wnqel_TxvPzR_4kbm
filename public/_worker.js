@@ -96,10 +96,87 @@ const WAITING = `
     })();
   </script>`;
 
+
+const TZ = "America/Vancouver";
+function esc(v){return String(v==null?"":v).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));}
+function local(iso){
+  try{return new Intl.DateTimeFormat("en-CA",{timeZone:TZ,dateStyle:"medium",timeStyle:"medium"}).format(new Date(iso));}
+  catch(e){return iso;}
+}
+
+// Every visit to an admin path is recorded, signed in or not. This is how the
+// scanner traffic on the other sites in this estate was discovered.
+async function logAccess(env, request, url, path) {
+  if (!env.LOGS) return;
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const stamp = now.toISOString().slice(11, 23).replace(/[:.]/g, "");
+  const cf = request.cf || {};
+  const entry = {
+    time: now.toISOString(),
+    ip: request.headers.get("cf-connecting-ip") || "-",
+    country: cf.country || "-",
+    city: cf.city || "-",
+    asn: cf.asOrganization || "-",
+    method: request.method,
+    path: path + (url.search || ""),
+    ua: request.headers.get("user-agent") || "-",
+    ref: request.headers.get("referer") || "-",
+  };
+  try {
+    await env.LOGS.put(`access/${day}/${stamp}-${Math.random().toString(36).slice(2,8)}.json`,
+      JSON.stringify(entry), { httpMetadata: { contentType: "application/json" } });
+  } catch (e) { /* logging must never break the page */ }
+}
+
+async function logPage(request, env, url) {
+  if (!env.LOG_KEY || url.searchParams.get("key") !== env.LOG_KEY) {
+    return new Response("Not Found", { status: 404 });
+  }
+  let access = [];
+  try {
+    const listed = await env.LOGS.list({ prefix: "access/", limit: 1000 });
+    const keys = listed.objects.map(o => o.key).sort().reverse().slice(0, 150);
+    access = (await Promise.all(keys.map(async k => {
+      try { return await (await env.LOGS.get(k)).json(); } catch (e) { return null; }
+    }))).filter(Boolean);
+  } catch (e) { /* keep rendering */ }
+  const running = await sessionRunning(env);
+  const tz = new Intl.DateTimeFormat("en-CA",{timeZone:TZ,timeZoneName:"short"})
+    .formatToParts(new Date()).find(x=>x.type==="timeZoneName").value;
+  const rows = access.map(e => `<tr><td>${esc(local(e.time))}</td><td>${esc(e.ip)}</td>
+    <td>${esc(e.country)} ${esc(e.city)}</td><td class="p">${esc(e.method)} ${esc(e.path)}</td>
+    <td class="u">${esc((e.ua||"").slice(0,60))}</td><td class="u">${esc((e.asn||"").slice(0,28))}</td></tr>`).join("");
+  return new Response(
+`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Editor log</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><style>
+ body{font:14px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:24px;background:#faf9f7;color:#2b2b2b}
+ h2{font-weight:600;margin:1.6em 0 .4em}h2:first-child{margin-top:0}
+ .n{color:#8a837a;font-size:13px}
+ table{border-collapse:collapse;width:100%;margin-top:.6em;background:#fff;
+       box-shadow:0 1px 2px rgba(0,0,0,.06);border-radius:6px;overflow:hidden}
+ th{text-align:left;font-weight:600;background:#f2efea;padding:7px 10px;white-space:nowrap}
+ td{padding:6px 10px;border-top:1px solid #f0ece6;vertical-align:top}
+ td.p{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+ td.u{color:#8a837a;font-size:12px}
+ .wrap{max-width:1100px;margin:auto}
+</style></head><body><div class="wrap">
+<h2>Editing session</h2>
+<p class="n">${running ? "A session is running now." : "No session is running."}</p>
+<h2>Visits to the editor address</h2>
+<p class="n">Everyone who reached it, whether or not they signed in. Last ${access.length}, newest first. Times ${esc(tz)}.</p>
+<table><tr><th>Time</th><th>Address</th><th>Where</th><th>Request</th><th>Browser</th><th>Network</th></tr>
+${rows || '<tr><td colspan="6">nothing recorded yet</td></tr>'}</table>
+</div></body></html>`,
+    { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    if (path === "/__editor-log") return logPage(request, env, url);
 
     // Has WordPress answered yet? Used by the waiting page.
     if (path === "/__editor-status") {
@@ -128,6 +205,7 @@ export default {
     }
 
     if (ADMIN.test(path)) {
+      ctx.waitUntil(logAccess(env, request, url, path));
       if (!env.EDIT_HOST) return page("Editing is not configured", NOT_RUNNING, 503);
       const target = new URL(request.url);
       target.hostname = env.EDIT_HOST;
