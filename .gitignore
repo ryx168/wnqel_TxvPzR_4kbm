@@ -1,0 +1,6 @@
+# The database and site archives must never enter this repository.
+*.sql
+*.sql.gz
+*.tar.gz
+*.zip
+export/
