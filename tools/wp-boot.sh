@@ -7,8 +7,11 @@ STATE=/tmp/state
 mkdir -p "$WORK" "$STATE"
 
 echo "::group::Restore state"
-aws s3 cp "s3://$STATE_BUCKET/db-latest.sql.gz" "$STATE/db.sql.gz" --endpoint-url "$R2_ENDPOINT" --no-progress
-aws s3 cp "s3://$STATE_BUCKET/wp-content.tar.gz" "$STATE/wp-content.tar.gz" --endpoint-url "$R2_ENDPOINT" --no-progress
+r2get() {  # r2get <key> <dest>
+  curl -sSf -m 900 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"     "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$STATE_BUCKET/objects/$1"     -o "$2"
+}
+r2get db-latest.sql.gz "$STATE/db.sql.gz"
+r2get wp-content.tar.gz "$STATE/wp-content.tar.gz"
 ls -lh "$STATE"
 echo "::endgroup::"
 
