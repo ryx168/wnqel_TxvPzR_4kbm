@@ -1,0 +1,74 @@
+name: Edit session
+
+# WordPress does not live anywhere. It is restored from object storage, run
+# inside this runner for the length of an editing session, saved back, and
+# then the public site is re-published as static files. Nothing persists here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      idle_minutes:
+        description: "Stop after this many minutes with no admin activity"
+        required: false
+        default: "15"
+      tunnel:
+        description: "Open the editing tunnel (false = restore/export dry run)"
+        type: boolean
+        required: false
+        default: true
+      export_only:
+        description: "Export the site and upload it as an artifact WITHOUT publishing"
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: edit-session
+  cancel-in-progress: false
+
+jobs:
+  session:
+    runs-on: ubuntu-latest
+    # Under GitHub's 6-hour ceiling, so the save step always still gets to run.
+    timeout-minutes: 350
+    env:
+      SITE_HOST: ${{ secrets.SITE_HOST }}
+      EDIT_HOST: ${{ secrets.EDIT_HOST }}
+      STATE_BUCKET: ${{ secrets.STATE_BUCKET }}
+      PAGES_PROJECT: ${{ secrets.PAGES_PROJECT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: https://${{ secrets.CF_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      TUNNEL_TOKEN: ${{ secrets.TUNNEL_TOKEN }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      WP_VERSION: ${{ secrets.WP_VERSION }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore state and boot WordPress
+        run: bash tools/wp-boot.sh
+
+      - name: Hold the session open
+        if: ${{ inputs.tunnel }}
+        run: bash tools/wp-session.sh "${{ inputs.idle_minutes }}"
+
+      - name: Save state and publish
+        # always() so a cancelled or timed-out session still saves the database.
+        if: always()
+        run: bash tools/wp-save.sh "${{ inputs.export_only }}"
+
+      - name: Upload the export for inspection
+        if: ${{ inputs.export_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-export
+          path: /tmp/export
+          retention-days: 5
