@@ -61,7 +61,26 @@ fi
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 8 -H "Host: ${SITE_HOST}" http://127.0.0.1:8080/ || true)
 echo "  php server responds: ${code}"
 # Point the live hostname at this runner so the crawl produces real URLs.
-echo "127.0.0.1 ${SITE_HOST}" | sudo tee -a /etc/hosts >/dev/null
+grep -q " ${SITE_HOST}\$" /etc/hosts || echo "127.0.0.1 ${SITE_HOST}" | sudo tee -a /etc/hosts >/dev/null
+
+# WordPress canonicalises every request to WP_HOME. While that is https, the
+# crawler is 301'd to port 443 on this runner, where nothing listens, and every
+# fetch fails with "Connection refused". Point WP at the http export URL for
+# the duration of the crawl; the state was already saved above, and the runner
+# is thrown away afterwards. Published URLs are rewritten back below.
+sed -i "s#define('WP_HOME','https://${SITE_HOST}');#define('WP_HOME','http://${SITE_HOST}:8080');#" "$WORK/wp-config.php"
+sed -i "s#define('WP_SITEURL','https://${SITE_HOST}');#define('WP_SITEURL','http://${SITE_HOST}:8080');#" "$WORK/wp-config.php"
+pkill -f "php -S 0.0.0.0:8080" || true
+sleep 2
+cd "$WORK"
+PHP_CLI_SERVER_WORKERS=6 setsid nohup php -S 0.0.0.0:8080 -t "$WORK" > /tmp/php-export.log 2>&1 < /dev/null &
+cd - >/dev/null
+for i in $(seq 1 20); do
+  c=$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://${SITE_HOST}:8080/" || true)
+  [ "$c" = "200" ] && break
+  sleep 1
+done
+echo "  export URL responds: $(curl -s -o /dev/null -w '%{http_code}' -m 8 "http://${SITE_HOST}:8080/" || true) (200 expected)"
 
 # Must crawl over http: with WP_HOME set to https, WordPress 301s every
 # request to a port nothing is listening on.
