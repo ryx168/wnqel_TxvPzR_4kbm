@@ -95,14 +95,14 @@ wget --mirror --page-requisites --adjust-extension --convert-links \
 # first pass silently misses them. WordPress lists every public URL in its
 # sitemap; fetch anything the crawl did not get, rewritten to the export base.
 echo "  checking the sitemap for pages the crawl missed"
-curl -sf -m 30 "http://${SITE_HOST}:8080/wp-sitemap.xml" -o /tmp/sm.xml || true
+curl -sfL -m 30 "http://${SITE_HOST}:8080/wp-sitemap.xml" -o /tmp/sm.xml || true
 if [ -s /tmp/sm.xml ]; then
   # follow the sitemap index down to the per-type sitemaps
   grep -oE '<loc>[^<]+</loc>' /tmp/sm.xml | sed 's/<[^>]*>//g' > /tmp/smlist
   : > /tmp/urls
   while read -r sm; do
     path=$(printf '%s' "$sm" | sed -E 's#^https?://[^/]+##')
-    curl -sf -m 30 "http://${SITE_HOST}:8080${path}"       | grep -oE '<loc>[^<]+</loc>' | sed 's/<[^>]*>//g' >> /tmp/urls || true
+    curl -sfL -m 30 "http://${SITE_HOST}:8080${path}"       | grep -oE '<loc>[^<]+</loc>' | sed 's/<[^>]*>//g' >> /tmp/urls || true
   done < /tmp/smlist
   sort -u /tmp/urls -o /tmp/urls
   echo "    sitemap lists $(wc -l < /tmp/urls) urls"
