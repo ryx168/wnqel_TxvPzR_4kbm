@@ -114,5 +114,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${SITE_HOST}" http://127
 echo "  homepage responds: $code"
 admin=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${SITE_HOST}" http://127.0.0.1:8080/wp-admin/ || true)
 echo "  wp-admin responds: $admin (302 to login is correct)"
+
+# The runner always installs CURRENT WordPress core, while the database comes
+# from whichever version the site was last saved at. WordPress then blocks
+# wp-admin with "Database Update Required" until somebody clicks a button - so
+# run the migration here rather than making the editor deal with it. It is a
+# no-op when the schema already matches.
+up="http://127.0.0.1:8080/wp-admin/upgrade.php?step=1"
+curl -s -H "Host: ${SITE_HOST}" "$up" > /tmp/upgrade.html 2>/dev/null || true
+schema=$({ grep -oiE "update complete|no update required" /tmp/upgrade.html 2>/dev/null || true; } | head -1)
+echo "  database schema: ${schema:-could not tell}"
+
 tail -5 /tmp/php.log || true
 echo "::endgroup::"
