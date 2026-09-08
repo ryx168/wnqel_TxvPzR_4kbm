@@ -39,7 +39,9 @@ def referenced_path(page_dir, out, url):
 
 
 out, HOST = sys.argv[1], sys.argv[2]
+LIST_ONLY = "--list" in sys.argv[3:]
 bad = {}
+missing_paths = set()
 for root, _, files in os.walk(out):
     for name in files:
         if not name.endswith(".html"):
@@ -56,6 +58,14 @@ for root, _, files in os.walk(out):
             target = os.path.join(out, urllib.parse.unquote(path).lstrip("/"))
             if "%3F" in path or not os.path.isfile(target):
                 bad.setdefault(os.path.relpath(page, out), []).append(raw)
+                missing_paths.add(urllib.parse.unquote(path))
+
+if LIST_ONLY:
+    # Just name the missing site-absolute paths, one per line, and exit 0 so a
+    # recovery step can act on them before the real check runs.
+    for path in sorted(missing_paths):
+        print(path)
+    sys.exit(0)
 
 if bad:
     print("REFUSING to publish: pages reference assets that are not in the export")
