@@ -151,6 +151,14 @@ fi
 
 # -------------------------------------------------------------------- publish
 echo "::group::Publish"
+# The Pages Function that proxies /wp-admin to the editing tunnel must ship
+# with the site: Pages has no Worker in front of it.
+if [ -f public/_worker.js ]; then
+  cp public/_worker.js "$OUT/_worker.js"
+  echo "  included _worker.js ($(stat -c%s "$OUT/_worker.js") bytes)"
+else
+  echo "  WARNING: public/_worker.js missing - the admin proxy will not be deployed"
+fi
 npm install -g wrangler@3 >/dev/null 2>&1
 npx wrangler pages deploy "$OUT" --project-name="$PAGES_PROJECT" --branch=main --commit-dirty=true
 echo "::endgroup::"
