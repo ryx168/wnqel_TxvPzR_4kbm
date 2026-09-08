@@ -93,10 +93,14 @@ wget --mirror --page-requisites --adjust-extension --convert-links \
 
 pages=$(find "$OUT" -name '*.html' | wc -l)
 echo "  exported ${pages} html pages, $(find "$OUT" -type f | wc -l) files total"
+find "$OUT" -name '*.html' | sed "s#$OUT##" | sort | sed 's/^/    page: /'
 
-# Guard 1: a broken export must never replace a working site.
-if [ "$pages" -lt 5 ]; then
-  echo "REFUSING to publish: only ${pages} pages exported"
+# Guard 1: a broken export must never replace a working site. MIN_PAGES is a
+# per-site floor - trupack.ca genuinely has only four pages, so a fixed 5 was
+# wrong. Set it to just below the real page count for each site.
+MIN_PAGES="${MIN_PAGES:-3}"
+if [ "$pages" -lt "$MIN_PAGES" ]; then
+  echo "REFUSING to publish: only ${pages} pages exported (floor ${MIN_PAGES})"
   exit 1
 fi
 # Guard 2: wget saves 404 pages under the asset's name when a resource is
