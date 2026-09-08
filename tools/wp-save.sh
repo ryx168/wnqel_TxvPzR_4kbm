@@ -179,6 +179,28 @@ SED
   echo "  query-mangled asset references repaired; remaining: ${left}"
 fi
 
+# wget crawls the PHP built-in server concurrently and it refuses connections
+# under burst - the log says "Connection refused" and a few assets are simply
+# absent, with nothing else to show for it. They are ordinary files sitting in
+# the WordPress tree, so copy them across rather than trusting another HTTP round.
+python3 "$(dirname "$0")/check-assets.py" "$OUT" "$SITE_HOST" --list > /tmp/missing.txt || true
+if [ -s /tmp/missing.txt ]; then
+  recovered=0; absent=0
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    src="$WORK/${rel#/}"
+    if [ -f "$src" ]; then
+      mkdir -p "$OUT$(dirname "$rel")"
+      cp -f "$src" "$OUT$rel"
+      recovered=$((recovered+1))
+    else
+      absent=$((absent+1))
+      echo "    not in the WordPress tree either: $rel"
+    fi
+  done < /tmp/missing.txt
+  echo "  copied ${recovered} asset(s) the crawl missed; ${absent} genuinely absent"
+fi
+
 # Guard 3: every local asset a page references must exist in the export.
 # Counting pages, diffing text, even counting stylesheet LINKS all called a
 # broken export healthy - the links were there and pointed at nothing.
