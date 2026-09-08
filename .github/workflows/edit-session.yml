@@ -66,5 +66,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: site-export
-          path: /tmp/export
+          # Only the HTML: plugin bundles carry characters GitHub's artifact
+          # uploader rejects, and the pages are what needs inspecting anyway.
+          path: /tmp/export/**/*.html
           retention-days: 5
+          if-no-files-found: warn
