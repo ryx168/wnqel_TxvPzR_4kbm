@@ -142,6 +142,17 @@ fi
 # The crawl records the runner's port; the published site must not.
 grep -rl ":8080" "$OUT" --include='*.html' --include='*.css' --include='*.js' 2>/dev/null \
   | xargs -r sed -i "s#http://${SITE_HOST}:8080#https://${SITE_HOST}#g; s#${SITE_HOST}:8080#${SITE_HOST}#g"
+
+# Normalise internal links to SITE_HOST. The content links to the bare apex
+# more often than to www, and a zone apex cannot be a CNAME - so those links
+# would route through the old server on every click today, and break entirely
+# once it is retired. Only www can point at Pages.
+apex="${SITE_HOST#www.}"
+if [ "$apex" != "$SITE_HOST" ]; then
+  grep -rl "//${apex}" "$OUT" --include='*.html' --include='*.css' --include='*.js' --include='*.xml' 2>/dev/null     | xargs -r sed -i "s#https://${apex}/#https://${SITE_HOST}/#g; s#http://${apex}/#https://${SITE_HOST}/#g"
+  left=$(grep -rho "//${apex}/" "$OUT" --include='*.html' 2>/dev/null | wc -l)
+  echo "  internal links normalised to ${SITE_HOST}; apex references left: ${left}"
+fi
 echo "::endgroup::"
 
 if [ "$MODE" = "true" ]; then
