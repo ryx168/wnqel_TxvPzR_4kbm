@@ -149,8 +149,14 @@ grep -rl ":8080" "$OUT" --include='*.html' --include='*.css' --include='*.js' 2>
 # once it is retired. Only www can point at Pages.
 apex="${SITE_HOST#www.}"
 if [ "$apex" != "$SITE_HOST" ]; then
-  grep -rl "//${apex}" "$OUT" --include='*.html' --include='*.css' --include='*.js' --include='*.xml' 2>/dev/null     | xargs -r sed -i "s#https://${apex}/#https://${SITE_HOST}/#g; s#http://${apex}/#https://${SITE_HOST}/#g"
-  left=$(grep -rho "//${apex}/" "$OUT" --include='*.html' 2>/dev/null | wc -l)
+  # Fixed-string grep, and xargs -0, because upload filenames can contain
+  # spaces and the host contains dots that a regex would treat as wildcards.
+  for scheme in http https; do
+    grep -rlZ -F "${scheme}://${apex}/" "$OUT" \
+         --include='*.html' --include='*.css' --include='*.js' --include='*.xml' 2>/dev/null \
+      | xargs -0 -r sed -i "s|${scheme}://${apex}/|https://${SITE_HOST}/|g"
+  done
+  left=$(grep -rhoF "//${apex}/" "$OUT" --include='*.html' 2>/dev/null | wc -l)
   echo "  internal links normalised to ${SITE_HOST}; apex references left: ${left}"
 fi
 echo "::endgroup::"
