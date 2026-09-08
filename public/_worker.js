@@ -77,12 +77,23 @@ async function startSession(env) {
 }
 
 const NOT_RUNNING = `
-  <h1>The editor is not running</h1>
-  <p>WordPress is started only while you are editing, so it takes about a
-     minute to come up. Start it, then sign in as usual.</p>
-  <form method="POST" action="/__editor-start">
+  <h1><span class="spin"></span>Starting the editor</h1>
+  <p>WordPress runs only while you are editing, so it takes a minute to come up.
+     The login page will open by itself.</p>
+  <form method="POST" action="/__editor-start" id="f">
     <button type="submit">Start the editor</button>
-  </form>`;
+  </form>
+  <script>
+    // Auto-start, but from JavaScript rather than on the bare GET. A plain GET
+    // auto-start was live on two other sites in this estate and was driven by
+    // scanners roughly hourly - each probe spent a runner and exposed a login.
+    // Requiring script execution stops the crawlers that do not run JS, while a
+    // real visitor never sees the button.
+    (function(){
+      var f=document.getElementById('f');
+      if(f){ f.style.display='none'; setTimeout(function(){ f.submit(); }, 250); }
+    })();
+  </script>`;
 
 const WAITING = `
   <h1><span class="spin"></span>Starting the editor</h1>
