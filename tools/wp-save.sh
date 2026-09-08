@@ -23,13 +23,16 @@ if ! zcat /tmp/db.sql.gz | grep -q "CREATE TABLE \`wp_posts\`"; then
   echo "REFUSING to save: the dump has no wp_posts table"
   exit 1
 fi
-aws s3 cp /tmp/db.sql.gz "s3://$STATE_BUCKET/db-latest.sql.gz" --endpoint-url "$R2_ENDPOINT" --no-progress
-aws s3 cp /tmp/db.sql.gz "s3://$STATE_BUCKET/history/${STAMP}-db.sql.gz" --endpoint-url "$R2_ENDPOINT" --no-progress
+r2put() {  # r2put <file> <key>
+  curl -sSf -m 900 -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"     -H "Content-Type: application/gzip" --data-binary @"$1"     "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$STATE_BUCKET/objects/$2"     -o /dev/null
+}
+r2put /tmp/db.sql.gz db-latest.sql.gz
+r2put /tmp/db.sql.gz "history/${STAMP}-db.sql.gz"
 
 tar czf /tmp/wp-content.tar.gz -C "$WORK" \
   --exclude='wp-content/cache' --exclude='wp-content/upgrade' \
   --exclude='wp-content/upgrade-temp-backup' wp-content
-aws s3 cp /tmp/wp-content.tar.gz "s3://$STATE_BUCKET/wp-content.tar.gz" --endpoint-url "$R2_ENDPOINT" --no-progress
+r2put /tmp/wp-content.tar.gz wp-content.tar.gz
 echo "  state saved"
 echo "::endgroup::"
 
