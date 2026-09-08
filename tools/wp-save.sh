@@ -45,6 +45,21 @@ echo "::endgroup::"
 # --------------------------------------------------------------- export site
 echo "::group::Export static site"
 rm -rf "$OUT"; mkdir -p "$OUT"
+
+# The PHP server started in an earlier workflow step does NOT reliably survive
+# into this one - each step gets its own session. Start our own if it is gone.
+if ! curl -sf -o /dev/null -m 5 -H "Host: ${SITE_HOST}" http://127.0.0.1:8080/ ; then
+  echo "  php server not answering - starting one for the export"
+  cd "$WORK"
+  PHP_CLI_SERVER_WORKERS=6 setsid nohup php -S 0.0.0.0:8080 -t "$WORK" > /tmp/php-export.log 2>&1 < /dev/null &
+  for i in $(seq 1 20); do
+    curl -sf -o /dev/null -m 3 -H "Host: ${SITE_HOST}" http://127.0.0.1:8080/ && break
+    sleep 1
+  done
+  cd - >/dev/null
+fi
+code=$(curl -s -o /dev/null -w '%{http_code}' -m 8 -H "Host: ${SITE_HOST}" http://127.0.0.1:8080/ || true)
+echo "  php server responds: ${code}"
 # Point the live hostname at this runner so the crawl produces real URLs.
 echo "127.0.0.1 ${SITE_HOST}" | sudo tee -a /etc/hosts >/dev/null
 
