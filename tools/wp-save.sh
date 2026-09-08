@@ -91,6 +91,34 @@ wget --mirror --page-requisites --adjust-extension --convert-links \
      --directory-prefix "$OUT" --no-host-directories \
      "http://${SITE_HOST}:8080/" || true
 
+# Pages linked only as https://<apex>/... are a different host to wget, so the
+# first pass silently misses them. WordPress lists every public URL in its
+# sitemap; fetch anything the crawl did not get, rewritten to the export base.
+echo "  checking the sitemap for pages the crawl missed"
+curl -sf -m 30 "http://${SITE_HOST}:8080/wp-sitemap.xml" -o /tmp/sm.xml || true
+if [ -s /tmp/sm.xml ]; then
+  # follow the sitemap index down to the per-type sitemaps
+  grep -oE '<loc>[^<]+</loc>' /tmp/sm.xml | sed 's/<[^>]*>//g' > /tmp/smlist
+  : > /tmp/urls
+  while read -r sm; do
+    path=$(printf '%s' "$sm" | sed -E 's#^https?://[^/]+##')
+    curl -sf -m 30 "http://${SITE_HOST}:8080${path}"       | grep -oE '<loc>[^<]+</loc>' | sed 's/<[^>]*>//g' >> /tmp/urls || true
+  done < /tmp/smlist
+  sort -u /tmp/urls -o /tmp/urls
+  echo "    sitemap lists $(wc -l < /tmp/urls) urls"
+  while read -r u; do
+    path=$(printf '%s' "$u" | sed -E 's#^https?://[^/]+##')
+    [ -z "$path" ] && path=/
+    case "$path" in *wp-json*|*feed*|*wp-admin*) continue;; esac
+    target="$OUT${path%/}/index.html"
+    [ "$path" = "/" ] && target="$OUT/index.html"
+    if [ ! -f "$target" ]; then
+      echo "    fetching missed page: $path"
+      wget --page-requisites --adjust-extension --convert-links --no-verbose            --execute robots=off --tries=2 --timeout=25            --directory-prefix "$OUT" --no-host-directories            "http://${SITE_HOST}:8080${path}" 2>&1 | tail -1 || true
+    fi
+  done < /tmp/urls
+fi
+
 pages=$(find "$OUT" -name '*.html' | wc -l)
 echo "  exported ${pages} html pages, $(find "$OUT" -type f | wc -l) files total"
 find "$OUT" -name '*.html' | sed "s#$OUT##" | sort | sed 's/^/    page: /'
