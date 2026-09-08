@@ -132,16 +132,22 @@ fi
 # Guard 2: wget saves 404 pages under the asset's name when a resource is
 # missing, and --convert-links then rewires the site to those stubs. The page
 # count alone does not catch it.
-if find "$OUT" -type f \( -name '*.jpg.html' -o -name '*.png.html' -o -name '*.gif.html' \
-        -o -name '*.css.html' -o -name '*.js.html' \) | grep -q .; then
+# grep -q exits on its first match, the find upstream takes SIGPIPE, and under
+# pipefail the whole condition reads as false - so this guard never fired.
+stubs=$(find "$OUT" -type f \( -name '*.jpg.html' -o -name '*.png.html' -o -name '*.gif.html' \
+        -o -name '*.css.html' -o -name '*.js.html' \) | head -5)
+if [ -n "$stubs" ]; then
   echo "REFUSING to publish: the export contains 404 stubs named as assets"
-  find "$OUT" -type f -name '*.*.html' | head -5
+  echo "$stubs"
   exit 1
 fi
 
 # The crawl records the runner's port; the published site must not.
-grep -rl ":8080" "$OUT" --include='*.html' --include='*.css' --include='*.js' 2>/dev/null \
-  | xargs -r sed -i "s#http://${SITE_HOST}:8080#https://${SITE_HOST}#g; s#${SITE_HOST}:8080#${SITE_HOST}#g"
+grep -rl ":8080" "$OUT" --include='*.html' --include='*.css' --include='*.js' \
+     > /tmp/hits8080 2>/dev/null || true
+if [ -s /tmp/hits8080 ]; then
+  xargs -r sed -i "s#http://${SITE_HOST}:8080#https://${SITE_HOST}#g; s#${SITE_HOST}:8080#${SITE_HOST}#g" < /tmp/hits8080
+fi
 
 # Normalise internal links to SITE_HOST. The content links to the bare apex
 # more often than to www, and a zone apex cannot be a CNAME - so those links
@@ -153,10 +159,16 @@ if [ "$apex" != "$SITE_HOST" ]; then
   # spaces and the host contains dots that a regex would treat as wildcards.
   for scheme in http https; do
     grep -rlZ -F "${scheme}://${apex}/" "$OUT" \
-         --include='*.html' --include='*.css' --include='*.js' --include='*.xml' 2>/dev/null \
-      | xargs -0 -r sed -i "s|${scheme}://${apex}/|https://${SITE_HOST}/|g"
+         --include='*.html' --include='*.css' --include='*.js' --include='*.xml' \
+         > /tmp/hits 2>/dev/null || true
+    # A grep that matches nothing exits 1, and under pipefail that would kill
+    # the whole publish silently - so collect first, then act.
+    if [ -s /tmp/hits ]; then
+      xargs -0 -r sed -i "s|${scheme}://${apex}/|https://${SITE_HOST}/|g" < /tmp/hits
+    fi
   done
-  left=$(grep -rhoF "//${apex}/" "$OUT" --include='*.html' 2>/dev/null | wc -l)
+  # Success here means zero matches, and a grep that matches nothing exits 1.
+  left=$({ grep -rhoF "//${apex}/" "$OUT" --include='*.html' 2>/dev/null || true; } | wc -l)
   echo "  internal links normalised to ${SITE_HOST}; apex references left: ${left}"
 fi
 echo "::endgroup::"
