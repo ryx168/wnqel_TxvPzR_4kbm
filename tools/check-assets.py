@@ -28,7 +28,10 @@ def referenced_path(page_dir, out, url):
         return None
     if url.startswith("http"):
         parts = urllib.parse.urlparse(url)
-        if parts.netloc != HOST:
+        # The bare apex is this site too. Missing that meant a stylesheet linked
+        # as https://<apex>/... was written off as somebody else's URL and never
+        # checked - which is how one file slipped through onto the live site.
+        if parts.netloc not in (HOST, APEX):
             return None
         return parts.path
     if url.startswith("/"):
@@ -39,6 +42,7 @@ def referenced_path(page_dir, out, url):
 
 
 out, HOST = sys.argv[1], sys.argv[2]
+APEX = HOST[4:] if HOST.startswith("www.") else HOST
 LIST_ONLY = "--list" in sys.argv[3:]
 bad = {}
 missing_paths = set()
