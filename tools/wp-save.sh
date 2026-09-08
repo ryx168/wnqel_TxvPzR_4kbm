@@ -179,6 +179,29 @@ SED
   echo "  query-mangled asset references repaired; remaining: ${left}"
 fi
 
+# Normalise internal links to SITE_HOST. The content links to the bare apex
+# more often than to www, and a zone apex cannot be a CNAME - so those links
+# would route through the old server on every click today, and break entirely
+# once it is retired. Only www can point at Pages.
+apex="${SITE_HOST#www.}"
+if [ "$apex" != "$SITE_HOST" ]; then
+  # Fixed-string grep, and xargs -0, because upload filenames can contain
+  # spaces and the host contains dots that a regex would treat as wildcards.
+  for scheme in http https; do
+    grep -rlZ -F "${scheme}://${apex}/" "$OUT" \
+         --include='*.html' --include='*.css' --include='*.js' --include='*.xml' \
+         > /tmp/hits 2>/dev/null || true
+    # A grep that matches nothing exits 1, and under pipefail that would kill
+    # the whole publish silently - so collect first, then act.
+    if [ -s /tmp/hits ]; then
+      xargs -0 -r sed -i "s|${scheme}://${apex}/|https://${SITE_HOST}/|g" < /tmp/hits
+    fi
+  done
+  # Success here means zero matches, and a grep that matches nothing exits 1.
+  left=$({ grep -rhoF "//${apex}/" "$OUT" --include='*.html' 2>/dev/null || true; } | wc -l)
+  echo "  internal links normalised to ${SITE_HOST}; apex references left: ${left}"
+fi
+
 # wget crawls the PHP built-in server concurrently and it refuses connections
 # under burst - the log says "Connection refused" and a few assets are simply
 # absent, with nothing else to show for it. They are ordinary files sitting in
@@ -206,28 +229,6 @@ fi
 # broken export healthy - the links were there and pointed at nothing.
 python3 "$(dirname "$0")/check-assets.py" "$OUT" "$SITE_HOST"
 
-# Normalise internal links to SITE_HOST. The content links to the bare apex
-# more often than to www, and a zone apex cannot be a CNAME - so those links
-# would route through the old server on every click today, and break entirely
-# once it is retired. Only www can point at Pages.
-apex="${SITE_HOST#www.}"
-if [ "$apex" != "$SITE_HOST" ]; then
-  # Fixed-string grep, and xargs -0, because upload filenames can contain
-  # spaces and the host contains dots that a regex would treat as wildcards.
-  for scheme in http https; do
-    grep -rlZ -F "${scheme}://${apex}/" "$OUT" \
-         --include='*.html' --include='*.css' --include='*.js' --include='*.xml' \
-         > /tmp/hits 2>/dev/null || true
-    # A grep that matches nothing exits 1, and under pipefail that would kill
-    # the whole publish silently - so collect first, then act.
-    if [ -s /tmp/hits ]; then
-      xargs -0 -r sed -i "s|${scheme}://${apex}/|https://${SITE_HOST}/|g" < /tmp/hits
-    fi
-  done
-  # Success here means zero matches, and a grep that matches nothing exits 1.
-  left=$({ grep -rhoF "//${apex}/" "$OUT" --include='*.html' 2>/dev/null || true; } | wc -l)
-  echo "  internal links normalised to ${SITE_HOST}; apex references left: ${left}"
-fi
 echo "::endgroup::"
 
 if [ "$MODE" = "true" ]; then
