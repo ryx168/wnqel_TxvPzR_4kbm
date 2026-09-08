@@ -19,10 +19,14 @@ mysqldump -uroot -proot --single-transaction --quick --default-character-set=utf
 size=$(stat -c%s /tmp/db.sql.gz)
 echo "  database dump: ${size} bytes"
 # A dump that lost the posts table would otherwise overwrite a good backup.
-if ! zcat /tmp/db.sql.gz | grep -q "CREATE TABLE \`wp_posts\`"; then
+# grep -c not -q: -q exits on the first match, gzip takes SIGPIPE, and
+# pipefail then reports the whole pipeline as failed.
+posts=$(zcat /tmp/db.sql.gz | grep -c "CREATE TABLE .wp_posts." || true)
+if [ "${posts:-0}" -lt 1 ]; then
   echo "REFUSING to save: the dump has no wp_posts table"
   exit 1
 fi
+echo "  wp_posts present in dump: yes"
 r2put() {  # r2put <file> <key>
   curl -sSf -m 900 -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"     -H "Content-Type: application/gzip" --data-binary @"$1"     "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$STATE_BUCKET/objects/$2"     -o /dev/null
 }
