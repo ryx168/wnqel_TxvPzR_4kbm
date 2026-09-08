@@ -149,6 +149,41 @@ if [ -s /tmp/hits8080 ]; then
   xargs -r sed -i "s#http://${SITE_HOST}:8080#https://${SITE_HOST}#g; s#${SITE_HOST}:8080#${SITE_HOST}#g" < /tmp/hits8080
 fi
 
+# wget --adjust-extension saves "main.css?ver=9" on disk as "main.css%3Fver=9.css",
+# and --convert-links then rewires pages to that encoded name. The FIRST page
+# crawled keeps absolute URLs, so the homepage looks perfect while every
+# recovered inner page silently loads no CSS at all. Put the references back to
+# clean root-relative paths, and drop the duplicate mangled files.
+# -type f, and [?] not ?, because ? is a glob wildcard in find - '*?*'
+# matches every name there is, directories included.
+find "$OUT" -depth -type f \( -name '*%3F*' -o -name '*[?]*' \) -print0 2>/dev/null > /tmp/mangled || true
+if [ -s /tmp/mangled ]; then
+  while IFS= read -r -d '' f; do
+    t="${f%%'%3F'*}"; t="${t%%'?'*}"
+    if [ -e "$t" ]; then rm -f "$f"; else mv -f "$f" "$t"; fi
+  done < /tmp/mangled
+  echo "  removed $(tr -dc '\0' < /tmp/mangled | wc -c) query-mangled duplicate file(s)"
+fi
+grep -rlZ -F "%3F" "$OUT" --include='*.html' --include='*.css' \
+     > /tmp/hitsq 2>/dev/null || true
+grep -rlZ -E "(href|src)=[\"']((\.\./)+|)wp-(content|includes)/" "$OUT" \
+     --include='*.html' >> /tmp/hitsq 2>/dev/null || true
+if [ -s /tmp/hitsq ]; then
+  # In a heredoc nothing needs shell escaping, which this expression is full of.
+  cat > /tmp/unmangle.sed <<'SED'
+s#(href|src)=(.)(\.\./)*(wp-(content|includes)/)#\1=\2/\4#g
+s#%3F[^'")]*##g
+SED
+  xargs -0 -r sed -i -E -f /tmp/unmangle.sed < /tmp/hitsq
+  left=$({ grep -rhoF "%3F" "$OUT" --include='*.html' 2>/dev/null || true; } | wc -l)
+  echo "  query-mangled asset references repaired; remaining: ${left}"
+fi
+
+# Guard 3: every local asset a page references must exist in the export.
+# Counting pages, diffing text, even counting stylesheet LINKS all called a
+# broken export healthy - the links were there and pointed at nothing.
+python3 "$(dirname "$0")/check-assets.py" "$OUT" "$SITE_HOST"
+
 # Normalise internal links to SITE_HOST. The content links to the bare apex
 # more often than to www, and a zone apex cannot be a CNAME - so those links
 # would route through the old server on every click today, and break entirely
