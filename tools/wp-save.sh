@@ -224,6 +224,12 @@ if [ -s /tmp/missing.txt ]; then
   echo "  copied ${recovered} asset(s) the crawl missed; ${absent} genuinely absent"
 fi
 
+# The WPForms contact form posts over AJAX to /wp-json + admin-ajax.php, which
+# do not exist on a static host - left alone it looks fine and drops every
+# enquiry. Rewrite it to a plain POST /contact-send that _worker.js delivers via
+# Postmark + R2. Idempotent, and a no-op on any page without a WPForms form.
+python3 "$(dirname "$0")/rewrite-form.py" "$OUT"
+
 # Guard 3: every local asset a page references must exist in the export.
 # Counting pages, diffing text, even counting stylesheet LINKS all called a
 # broken export healthy - the links were there and pointed at nothing.

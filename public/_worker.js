@@ -1,9 +1,11 @@
-// Pages Function for the static site + the on-demand WordPress admin.
+// trupack.ca - static site on Pages, plus the three things that cannot
+// be static: the media library (R2), the contact form, and the on-demand
+// WordPress editor. In Pages "advanced mode" this file handles every request,
+// so static pages are served explicitly through env.ASSETS.
 //
-// Static pages come from Pages itself (env.ASSETS). The admin paths are
-// proxied to the editing tunnel, which only exists while a session is running.
-// Pages has no Worker in front of it, so this file does the job the Worker
-// does on the other sites in this estate.
+// Editor: WordPress runs only while someone is editing, inside a GitHub Actions
+// runner reached through a tunnel at EDIT_HOST. Admin paths are proxied there;
+// when no session is up, a page offers to start one.
 
 const ADMIN = /^\/(wp-admin|wp-login\.php|wp-signup\.php|wp-cron\.php|wp-json|wp-includes)(\/|$|\?)/i;
 
@@ -182,10 +184,56 @@ ${rows || '<tr><td colspan="6">nothing recorded yet</td></tr>'}</table>
     { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
+
+const FIELDS = [
+  ["your-name", "Name", true],
+  ["your-number", "Mobile number", false],
+  ["your-email", "Email", true],
+  ["your-country", "City & country", false],
+  ["your-message", "Message", true],
+];
+
+const NL = String.fromCharCode(10);
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // The media library is not in this deployment - it is in R2, because it is
+    // ~800 MB of video and camera originals that neither the runner nor the
+    // export should ever carry. Fall back to the deployed assets so the switch
+    // is safe while the one-time upload is still filling the bucket.
+    if (path.startsWith("/wp-content/uploads/") && env.MEDIA && request.method === "GET") {
+      const obj = await env.MEDIA.get(decodeURIComponent(path.slice(1)));
+      if (obj) {
+        const h = new Headers();
+        obj.writeHttpMetadata(h);
+        // Trust the extension over a weak stored type: minified CSS uploaded as
+        // text/plain is refused by browsers under nosniff, and this site ships that.
+        const stored = (h.get("content-type") || "").split(";")[0].trim();
+        const byExt = mediaType(path);
+        if (!stored || stored === "text/plain" || stored === "application/octet-stream" || (byExt !== "application/octet-stream" && stored !== byExt && /\.(css|js|svg|webp|woff2?)$/i.test(path))) {
+          h.set("content-type", byExt);
+        }
+        h.set("etag", obj.httpEtag);
+        h.set("cache-control", "public, max-age=86400");
+        return new Response(obj.body, { headers: h });
+      }
+    }
+
+    // /webmail belongs to the mail server (Roundcube on mail.trupack.ca),
+    // not to this site - it worked on the old host and people have it bookmarked.
+    // 302, not 301: mail hosting in this estate is mid-migration, and a permanent
+    // redirect cached in browsers would be very hard to walk back.
+    if (/^\/webmail(\/|$)/i.test(path)) {
+      return Response.redirect("https://mail.trupack.ca/", 302);
+    }
+
+    if (path === "/contact-send") {
+      if (request.method !== "POST") return Response.redirect(`${url.origin}/contact/`, 303);
+      return handleContact(request, env, url);
+    }
 
     if (path === "/__editor-log") return logPage(request, env, url);
 
@@ -193,10 +241,7 @@ export default {
     if (path === "/__editor-status") {
       let ready = false;
       try {
-        const probe = await fetch(`https://${env.EDIT_HOST}/wp-login.php`, {
-          method: "HEAD",
-          redirect: "manual",
-        });
+        const probe = await fetch(`https://${env.EDIT_HOST}/wp-login.php`, { method: "HEAD", redirect: "manual" });
         ready = probe.status < 500;
       } catch { ready = false; }
       return new Response(JSON.stringify({ ready }), {
@@ -204,15 +249,25 @@ export default {
       });
     }
 
-    // The ONLY path that spends a runner, and only on a POST from the button.
-    // An unauthenticated GET must never be treated as consent: scanners walk
-    // /wp-admin constantly and would otherwise keep a login permanently online.
+    // The ONLY path that spends a runner, and only on a POST. An unauthenticated
+    // GET must never be treated as consent: scanners walk /wp-admin constantly.
     if (path === "/__editor-start") {
       if (request.method !== "POST") return Response.redirect(`${url.origin}/wp-admin/`, 303);
       if (looksLikeAPerson(request) && env.GH_TOKEN) {
         if (!(await sessionRunning(env))) await startSession(env);
       }
       return page("Starting the editor", WAITING);
+    }
+
+    // Public assets under /wp-includes/ and /wp-content/ belong to the export.
+    // Only when the export has nothing (the HTML fallback comes back) does the
+    // request fall through to the editor proxy - otherwise product pages lose
+    // their JS whenever no session is running.
+    if (/^\/wp-(includes|content)\//i.test(path) && (request.method === "GET" || request.method === "HEAD")) {
+      const a = await env.ASSETS.fetch(request);
+      const ct = (a.headers.get("content-type") || "").toLowerCase();
+      if (a.status === 200 && !ct.startsWith("text/html")) return a;
+      if (!/^\/wp-includes\//i.test(path)) return a;
     }
 
     if (ADMIN.test(path)) {
@@ -223,8 +278,6 @@ export default {
       target.protocol = "https:";
       target.port = "";
       const headers = new Headers(request.headers);
-      // WordPress builds its links from this, and the browser is on the live
-      // host, not the tunnel - so keep the original Host.
       headers.set("x-forwarded-proto", "https");
       let upstream;
       try {
@@ -237,7 +290,6 @@ export default {
       } catch {
         return page("The editor is not running", NOT_RUNNING, 503);
       }
-      // 530/502 from the edge means the tunnel has no listener: no session.
       if (upstream.status === 530 || upstream.status === 502 || upstream.status === 523) {
         return page("The editor is not running", NOT_RUNNING, 503);
       }
@@ -251,3 +303,118 @@ export default {
     return env.ASSETS.fetch(request);
   },
 };
+
+const MEDIA_TYPES = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
+  webp: "image/webp", svg: "image/svg+xml", mp4: "video/mp4", webm: "video/webm", pdf: "application/pdf",
+  css: "text/css", js: "application/javascript", woff: "font/woff", woff2: "font/woff2" };
+function mediaType(p) {
+  const ext = (p.split(".").pop() || "").toLowerCase();
+  return MEDIA_TYPES[ext] || "application/octet-stream";
+}
+
+async function handleContact(request, env, url) {
+  let f;
+  try {
+    f = await request.formData();
+  } catch (e) {
+    return contactResult(url, false, "That form could not be read.");
+  }
+
+  // Honeypot: hidden from people, irresistible to bots. Accept quietly rather
+  // than explaining to a robot what gave it away.
+  if ((f.get("website") || "").toString().trim() !== "") return contactResult(url, true, "", true);
+
+  const data = {};
+  for (const [name, label, required] of FIELDS) {
+    const v = (f.get(name) || "").toString().trim().slice(0, 2000);
+    if (required && !v) return contactResult(url, false, `${label} is required.`);
+    data[label] = v;
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(data["Email"])) {
+    return contactResult(url, false, "That email address does not look right.");
+  }
+
+  const now = new Date();
+  data["Submitted"] = now.toISOString();
+  data["From address"] = request.headers.get("cf-connecting-ip") || "-";
+
+  // Store first. If Postmark is down or misconfigured the enquiry still exists,
+  // rather than being lost the way this estate has lost them before.
+  let stored = false;
+  const key = `enquiries/${now.toISOString().slice(0, 10)}/${now.getTime()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  if (env.DATA) {
+    try {
+      await env.DATA.put(key, JSON.stringify(data, null, 2),
+        { httpMetadata: { contentType: "application/json" } });
+      stored = true;
+    } catch (e) { /* the email is the backstop */ }
+  }
+
+  let mailed = false;
+  if (env.POSTMARK_TOKEN && env.FORM_TO && env.FORM_FROM) {
+    const lines = Object.entries(data).map(([k, v]) => `${k}: ${v || "-"}`).join(NL);
+    try {
+      const r = await fetch("https://api.postmarkapp.com/email", {
+        method: "POST",
+        headers: {
+          "X-Postmark-Server-Token": env.POSTMARK_TOKEN,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({
+          From: env.FORM_FROM,
+          To: env.FORM_TO,
+          ReplyTo: data["Email"],
+          Subject: `Contact Form Submission from ${data["Name"]}`,
+          TextBody: `A message was sent from the website contact form.${NL}${NL}${lines}${NL}`,
+          MessageStream: "outbound",
+        }),
+      });
+      mailed = r.ok;
+      // Record what Postmark said. Without this a failed send is invisible:
+      // the enquiry is stored, the visitor sees "thank you", and nobody knows.
+      data["_delivery"] = { status: r.status, body: (await r.text()).slice(0, 300) };
+    } catch (e) {
+      mailed = false;
+      data["_delivery"] = { status: 0, body: String(e && e.message || e).slice(0, 300) };
+    }
+  } else {
+    data["_delivery"] = { status: 0, body: "not attempted: " +
+      (env.POSTMARK_TOKEN ? "" : "POSTMARK_TOKEN missing ") +
+      (env.FORM_TO ? "" : "FORM_TO missing ") + (env.FORM_FROM ? "" : "FORM_FROM missing ") };
+  }
+  data["_delivery"].mailed = mailed;
+  if (stored) {
+    try {
+      await env.DATA.put(key, JSON.stringify(data, null, 2),
+        { httpMetadata: { contentType: "application/json" } });
+    } catch (e) { /* the first copy is still there */ }
+  }
+
+  // Never tell someone their message went through when nothing kept it.
+  if (!stored && !mailed) {
+    return contactResult(url, false,
+      "We could not deliver that just now. Please email info@trupack.ca directly.");
+  }
+  return contactResult(url, true, "", mailed);
+}
+
+function contactResult(url, ok, error) {
+  const body = ok
+    ? `<h2>Thank you &mdash; we have your message</h2>
+       <p>Someone will get back to you shortly.</p>`
+    : `<h2>That did not go through</h2><p>${error}</p>`;
+  return new Response(
+    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>${ok ? "Message received" : "Something went wrong"}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><style>
+ body{font:16px/1.65 system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;
+      display:flex;align-items:center;justify-content:center;background:#f6f6f4;color:#232323;padding:24px}
+ main{max-width:32em;text-align:center;background:#fff;padding:38px 34px;border-radius:8px;
+      box-shadow:0 1px 3px rgba(0,0,0,.08)}
+ h2{font-weight:600;margin:0 0 .6em} a{color:#b3282d}
+</style></head><body><main>${body}
+<p style="margin-top:2em"><a href="${url.origin}/contact/">Back to the contact page</a></p></main></body></html>`,
+    { status: ok ? 200 : 400,
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
