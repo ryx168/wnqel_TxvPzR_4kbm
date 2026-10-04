@@ -36,10 +36,26 @@ FB_URL=""
   sudo mv /tmp/filebrowser /usr/local/bin/filebrowser && sudo chmod +x /usr/local/bin/filebrowser
   FB_DB=/tmp/filebrowser.db
   filebrowser config init -d "$FB_DB" --root "$FB_ROOT" >/tmp/fb-init.log 2>&1
-  # No-login web UI: the session is already gated by the hub login + the random
-  # one-time tunnel URL, so filebrowser auto-logs in (no username/password prompt).
-  filebrowser config set -d "$FB_DB" --auth.method=noauth >>/tmp/fb-init.log 2>&1
-  filebrowser users add -d "$FB_DB" admin "${FB_PASS:-changeme}" --perm.admin >/tmp/fb-user.log 2>&1 || true
+  # Per-domain login: if the owner set a username+password for this domain in the
+  # hub, require it; else stay no-login (the random tunnel URL still gates it).
+  FM_DOM="${SITE_HOST#www.}"
+  FM_USER=""; FM_PW=""
+  if [ -n "${FMAUTH_KEY:-}" ] && [ -n "$FM_DOM" ]; then
+    creds=$(curl -s -m 10 -H "authorization: Bearer $FMAUTH_KEY" "https://conanhub.supere.ca/fmauth/$FM_DOM" 2>/dev/null || echo '{}')
+    FM_USER=$(printf '%s' "$creds" | python3 -c "import sys,json;print(json.load(sys.stdin).get('u',''))" 2>/dev/null || true)
+    FM_PW=$(printf '%s' "$creds" | python3 -c "import sys,json;print(json.load(sys.stdin).get('p',''))" 2>/dev/null || true)
+  fi
+  if [ -n "$FM_USER" ] && [ -n "$FM_PW" ]; then
+    filebrowser config set -d "$FB_DB" --auth.method=json >>/tmp/fb-init.log 2>&1
+    filebrowser users add "$FM_USER" "$FM_PW" --perm.admin -d "$FB_DB" >/tmp/fb-user.log 2>&1 \
+      || filebrowser users update "$FM_USER" --password "$FM_PW" -d "$FB_DB" >>/tmp/fb-user.log 2>&1
+    { [ "$FM_USER" != "admin" ] && filebrowser users rm admin -d "$FB_DB" >/dev/null 2>&1; } || true
+    echo "  web login: password required (user $FM_USER)"
+  else
+    filebrowser config set -d "$FB_DB" --auth.method=noauth >>/tmp/fb-init.log 2>&1
+    filebrowser users add -d "$FB_DB" admin "${FB_PASS:-changeme}" --perm.admin >/tmp/fb-user.log 2>&1 || true
+    echo "  web login: none (no per-domain credentials set)"
+  fi
   setsid nohup filebrowser -d "$FB_DB" -a 127.0.0.1 -p 8090 --root "$FB_ROOT" >/tmp/filebrowser.log 2>&1 < /dev/null &
   # Quick tunnel (anonymous trycloudflare), separate from the named admin tunnel.
   setsid nohup /tmp/cloudflared tunnel --url http://127.0.0.1:8090 --no-autoupdate >/tmp/fbcf.log 2>&1 < /dev/null &
