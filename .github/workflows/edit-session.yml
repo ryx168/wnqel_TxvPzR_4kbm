@@ -31,6 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     # Under GitHub's 6-hour ceiling, so the save step always still gets to run.
     timeout-minutes: 350
+    permissions:
+      contents: write
     env:
       SITE_HOST: ${{ secrets.SITE_HOST }}
       EDIT_HOST: ${{ secrets.EDIT_HOST }}
