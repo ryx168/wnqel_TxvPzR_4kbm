@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "include": [
+    "/wp-content/uploads/*",
+    "/wp-includes/*",
+    "/wp-admin",
+    "/wp-admin/*",
+    "/wp-login.php",
+    "/wp-signup.php",
+    "/wp-cron.php",
+    "/wp-json",
+    "/wp-json/*",
+    "/webmail",
+    "/webmail/*",
+    "/contact-send",
+    "/__editor-log",
+    "/__editor-status",
+    "/__editor-start"
+  ],
+  "exclude": []
+}

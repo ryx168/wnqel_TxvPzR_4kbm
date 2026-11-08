@@ -252,6 +252,32 @@ if [ -f public/_worker.js ]; then
 else
   echo "  WARNING: public/_worker.js missing - the admin proxy will not be deployed"
 fi
+
+# _routes.json keeps static files OUT of the Functions runtime. Without it the
+# _worker.js is a catch-all, so every CSS, JS and image costs a Pages Functions
+# invocation. Measured on this account 2026-11-08: 44 invocations per page
+# view, 4,404/day for only ~100 page views - and the account went over
+# both its 100,000/day request wall (error 1027, sites refusing) and its
+# 10,000,000 monthly included tier, which produced invoice IN-87840433.
+#
+# Pages STATIC assets are free and unlimited, so the include list names ONLY
+# the paths _worker.js has a real branch for; all the HTML, plugins and themes
+# are served statically and cost nothing. Every branch was checked against this
+# worker's own source, and the final fall-through is
+# "return env.ASSETS.fetch(request)" - identical to what Pages does with no
+# worker at all - so excluding everything else is behaviour-preserving.
+#
+# _routes.json with _worker.js is UNDOCUMENTED (Cloudflare documents it only
+# for the functions/ directory). Verified on a throwaway Pages project
+# 2026-11-08: it IS honoured in advanced mode, an unlisted path skips the
+# Worker entirely and still serves the right bytes, and the "exclude" key must
+# be present even when empty or wrangler rejects the file.
+if [ -f public/_routes.json ]; then
+  cp public/_routes.json "$OUT/_routes.json"
+  echo "  included _routes.json"
+else
+  echo "  WARNING: public/_routes.json missing - every static file will cost a Functions invocation"
+fi
 npm install -g wrangler@3 >/dev/null 2>&1
 npx wrangler pages deploy "$OUT" --project-name="$PAGES_PROJECT" --branch=main --commit-dirty=true
 echo "::endgroup::"
